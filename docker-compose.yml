@@ -20,6 +20,13 @@ services:
       - "8000:8000"
     env_file:
       - .env
+  #################################################
+  claude-bridge:
+    build: ./claude-bridge
+    restart: unless-stopped
+    environment:
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
+      - CLAUDE_MODEL=sonnet
 
 volumes:
   n8n_data:

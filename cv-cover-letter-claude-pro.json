@@ -1,0 +1,368 @@
+{
+  "name": "CV and Cover Letter Generator - Claude (Pro plan)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds",
+              "secondsInterval": 15
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [96, 16],
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nreturn [{ json: { offset: staticData.lastOffset || 0 } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 16],
+      "id": "read-offset",
+      "name": "Read Telegram Offset"
+    },
+    {
+      "parameters": {
+        "url": "=https://api.telegram.org/botYOUR_TELEGRAM_BOT_TOKEN/getUpdates",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "offset",
+              "value": "={{ $json.offset }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [560, 16],
+      "id": "telegram-updates",
+      "name": "Get Telegram Updates"
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst updates = $input.first().json.result || [];\nif (!updates.length) return [];\nstaticData.lastOffset = Math.max(...updates.map(update => update.update_id)) + 1;\nreturn updates.filter(update => (update.message?.text || '').trim().length > 20).map(update => ({ json: update }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 16],
+      "id": "filter-messages",
+      "name": "Filter Job Offers"
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "={{ $json.message.chat.id }}",
+        "text": "Je traite cette offre...",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1040, 16],
+      "id": "acknowledge-message",
+      "name": "Acknowledge Message"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ===== EDIT THESE =====\nconst MODEL = 'sonnet';   // Claude Code alias: 'sonnet' or 'haiku' (lighter on your Pro limits)\n\nconst CANDIDATE_PROFILE = `PASTE_YOUR_FULL_CANDIDATE_PROFILE_HERE`;\n\n// Must match what http://xelatex-api:8000/compile-resume expects\nconst RESUME_SCHEMA = {\n  personal_information: { full_name: '', email: '', phone: '', github: '', linkedin: '' },\n  PROFILE_SUMMARY: '3-4 sentence summary tailored to the offer',\n  skills: { '<category_name>': ['skill', 'skill'] },\n  experience: [{ title: '', company: '', location: '', dates: 'Mon YYYY – Mon YYYY', responsibilities: ['bullet'] }],\n  education: [{ degree: '', institution: '', dates: '' }],\n  certifications: ['']\n};\n\nconst LETTER_SCHEMA = {\n  COMPANY_NAME: '', JOB_TITLE: '', RECIPIENT_NAME: 'use \"Madame, Monsieur\" / \"Hiring Manager\" if unknown',\n  PARAGRAPH_HOOK: '', PARAGRAPH_VALUE: '', PARAGRAPH_ALIGNMENT: '', PARAGRAPH_CTA: ''\n};\n// ======================\n\nconst jobOffer = $json.message.text;\n\nconst system = [\n  'You are an expert career writer who tailors resumes and cover letters to job offers.',\n  'Use ONLY facts from the candidate profile. Never invent experience, employers, dates, metrics or skills.',\n  'You may reorder, select and rephrase content to emphasise what is most relevant to the offer.',\n  'Write in the same language as the job offer.',\n  'Output plain text only inside JSON values: no LaTeX, no Markdown, no HTML.',\n  'Respond with ONE valid JSON object and nothing else: no code fences, no commentary.'\n].join('\\n');\n\nconst resumeRequest = {\n  model: MODEL,\n  max_tokens: 4096,\n  system,\n  messages: [{\n    role: 'user',\n    content:\n      `<job_offer>\\n${jobOffer}\\n</job_offer>\\n\\n` +\n      `<candidate_profile>\\n${CANDIDATE_PROFILE}\\n</candidate_profile>\\n\\n` +\n      `Tailor the resume to this offer. Return JSON with EXACTLY these keys and structure ` +\n      `(values shown are descriptions, replace them):\\n` +\n      JSON.stringify(RESUME_SCHEMA, null, 2)\n  }]\n};\n\nconst letterRequest = {\n  model: MODEL,\n  max_tokens: 2048,\n  system,\n  messages: [{\n    role: 'user',\n    content:\n      `<job_offer>\\n${jobOffer}\\n</job_offer>\\n\\n` +\n      `<candidate_profile>\\n${CANDIDATE_PROFILE}\\n</candidate_profile>\\n\\n` +\n      `Write a concise, factual cover letter (each paragraph 2-4 sentences). Return JSON with EXACTLY these keys:\\n` +\n      JSON.stringify(LETTER_SCHEMA, null, 2)\n  }]\n};\n\nreturn { json: { chatId: $json.message.chat.id, jobOffer, resumeRequest, letterRequest } };",
+        "mode": "runOnceForEachItem"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 272],
+      "id": "build-prompts",
+      "name": "Build Prompts"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://claude-bridge:8080/v1/messages",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Build Prompts').item.json.resumeRequest) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [1280, 272],
+      "id": "claude-resume",
+      "name": "Claude - Resume JSON",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 10000
+    },
+    {
+      "parameters": {
+        "jsCode": "const res = $json;\nif (res.stop_reason === 'max_tokens') throw new Error('Claude hit max_tokens.');\n\nlet text = (res.content || []).filter(b => b.type === 'text').map(b => b.text).join('');\ntext = text.replace(/```(?:json)?/gi, '').trim();\nconst match = text.match(/\\{[\\s\\S]*\\}/);\nif (!match) throw new Error('Claude did not return JSON: ' + text.slice(0, 300));\nconst data = JSON.parse(match[0]);\n\n// Escape LaTeX special characters in every string value\nconst map = {\n  '\\\\': '\\\\textbackslash{}', '&': '\\\\&', '%': '\\\\%', '$': '\\\\$',\n  '#': '\\\\#', '_': '\\\\_', '{': '\\\\{', '}': '\\\\}',\n  '~': '\\\\textasciitilde{}', '^': '\\\\textasciicircum{}',\n};\nconst esc = s => s.replace(/[\\\\&%$#_{}~^]/g, c => map[c]);\nconst walk = v =>\n  typeof v === 'string' ? esc(v)\n  : Array.isArray(v) ? v.map(walk)\n  : v && typeof v === 'object'\n    ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)]))\n    : v;\n\ndata.PROFILE_SUMMARY = data.PROFILE_SUMMARY || data.summary || data.basics?.summary || '';\nreturn { json: walk(data) };",
+        "mode": "runOnceForEachItem"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 272],
+      "id": "parse-resume",
+      "name": "Parse Resume JSON"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://xelatex-api:8000/compile-resume",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          },
+          "timeout": 300000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [1760, 272],
+      "id": "compile-resume",
+      "name": "Compile Resume PDF"
+    },
+    {
+      "parameters": {
+        "operation": "sendDocument",
+        "chatId": "={{ $('Build Prompts').item.json.chatId }}",
+        "binaryData": true,
+        "binaryPropertyName": "data",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2000, 272],
+      "id": "send-resume",
+      "name": "Send Resume PDF"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://claude-bridge:8080/v1/messages",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Build Prompts').item.json.letterRequest) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [2240, 272],
+      "id": "claude-letter",
+      "name": "Claude - Cover Letter JSON",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 10000
+    },
+    {
+      "parameters": {
+        "jsCode": "const res = $json;\nif (res.stop_reason === 'max_tokens') throw new Error('Claude hit max_tokens.');\n\nlet text = (res.content || []).filter(b => b.type === 'text').map(b => b.text).join('');\ntext = text.replace(/```(?:json)?/gi, '').trim();\nconst match = text.match(/\\{[\\s\\S]*\\}/);\nif (!match) throw new Error('Claude did not return JSON: ' + text.slice(0, 300));\nconst data = JSON.parse(match[0]);\n\n// Escape LaTeX special characters in every string value\nconst map = {\n  '\\\\': '\\\\textbackslash{}', '&': '\\\\&', '%': '\\\\%', '$': '\\\\$',\n  '#': '\\\\#', '_': '\\\\_', '{': '\\\\{', '}': '\\\\}',\n  '~': '\\\\textasciitilde{}', '^': '\\\\textasciicircum{}',\n};\nconst esc = s => s.replace(/[\\\\&%$#_{}~^]/g, c => map[c]);\nconst walk = v =>\n  typeof v === 'string' ? esc(v)\n  : Array.isArray(v) ? v.map(walk)\n  : v && typeof v === 'object'\n    ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)]))\n    : v;\n\nreturn { json: walk(data) };",
+        "mode": "runOnceForEachItem"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2480, 272],
+      "id": "parse-letter",
+      "name": "Parse Cover Letter JSON"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://xelatex-api:8000/compile-cover-letter",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          },
+          "timeout": 300000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [2720, 272],
+      "id": "compile-letter",
+      "name": "Compile Cover Letter PDF"
+    },
+    {
+      "parameters": {
+        "operation": "sendDocument",
+        "chatId": "={{ $('Build Prompts').item.json.chatId }}",
+        "binaryData": true,
+        "binaryPropertyName": "data",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2960, 272],
+      "id": "send-letter",
+      "name": "Send Cover Letter PDF"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Telegram Offset",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Telegram Offset": {
+      "main": [
+        [
+          {
+            "node": "Get Telegram Updates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Telegram Updates": {
+      "main": [
+        [
+          {
+            "node": "Filter Job Offers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Job Offers": {
+      "main": [
+        [
+          {
+            "node": "Acknowledge Message",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Prompts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompts": {
+      "main": [
+        [
+          {
+            "node": "Claude - Resume JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude - Resume JSON": {
+      "main": [
+        [
+          {
+            "node": "Parse Resume JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Resume JSON": {
+      "main": [
+        [
+          {
+            "node": "Compile Resume PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compile Resume PDF": {
+      "main": [
+        [
+          {
+            "node": "Send Resume PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Resume PDF": {
+      "main": [
+        [
+          {
+            "node": "Claude - Cover Letter JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude - Cover Letter JSON": {
+      "main": [
+        [
+          {
+            "node": "Parse Cover Letter JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Cover Letter JSON": {
+      "main": [
+        [
+          {
+            "node": "Compile Cover Letter PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compile Cover Letter PDF": {
+      "main": [
+        [
+          {
+            "node": "Send Cover Letter PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "tags": []
+}
