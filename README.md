@@ -69,6 +69,7 @@ Telegram ──► n8n ──► AI engine ──► xelatex-api ──► PDFs 
 | `claude-bridge/` | the Claude bridge, prompt server and job locks |
 | `cv-cover-letter-*.json` | the three n8n workflows |
 | `.env.example` | settings template → copy to `.env` |
+| `bots.sh` | choose which bots run |
 
 ---
 
@@ -135,6 +136,52 @@ Your profile goes in `prompts/profile.md` (see below), not in n8n.
 
 Then just send a job offer (more than 20 characters) to a bot.
 
+### Choose which bots run
+
+`bots.sh` starts the containers the chosen bots need, turns their workflows **on** in n8n and the others **off**:
+
+| I want | Command |
+|---|---|
+| Only Claude | `./bots.sh claude` |
+| Only Gemini | `./bots.sh gemini` |
+| Only the local model | `./bots.sh local` |
+| Two of them | `./bots.sh claude gemini` (any combination) |
+| All three | `./bots.sh all` |
+| Stop everything | `docker-compose down` |
+
+- `ollama` only runs when the local bot is on (it frees ~2–3 GB of RAM otherwise).
+- `claude-bridge` always runs: it serves the prompts and locks for every bot (no Claude usage unless the Claude bot is on).
+- Your choice is remembered: a plain `docker-compose up -d` keeps the same bots on (but also starts `ollama`).
+
+---
+
+## RAM usage
+
+Idle (nothing being generated), measured:
+
+| Container | RAM |
+|---|---|
+| n8n | ~330 MB |
+| ollama (model not loaded) | ~190 MB |
+| xelatex-api | ~16 MB |
+| claude-bridge | ~13 MB |
+| **Total** | **~550 MB** |
+
+While generating, on top of that (estimates):
+
+| Activity | Extra RAM |
+|---|---|
+| Claude bot (Claude Code runs in the bridge) | +200–400 MB |
+| PDF compilation (LaTeX) | +100–300 MB, a few seconds |
+| Gemini bot | ~0 (runs on Google's servers) |
+| **Local bot (`qwen2.5:3b`)** | **+2.5 GB** |
+
+- Ollama keeps the model in RAM for 15 min after the last offer, then frees it.
+- Claude and/or Gemini only: **under 1 GB**.
+- With the local bot: **~3–3.5 GB** while generating. Fine on 8 GB, but close other heavy apps.
+- `qwen2.5:7b` needs ~5–6 GB on its own: avoid it on an 8 GB machine.
+- Not using the local bot? `./bots.sh claude gemini` stops `ollama` and frees its RAM.
+
 ---
 
 ## Customize
@@ -152,7 +199,7 @@ Edit, save, send an offer: changes apply right away (no restart, no re-import).
   - `'strict'` — only rephrases and reorders what is really in your profile.
 - **`MODELS`**
   - `claude`: `'sonnet'` or `'haiku'` (lighter on your Pro limits)
-  - `local`: comes from `OLLAMA_MODEL` in `.env`, e.g. `qwen2.5:7b` (better, needs ~8 GB of free RAM). Change it, then `docker-compose up -d`.
+  - `local`: comes from `OLLAMA_MODEL` in `.env`, e.g. `qwen2.5:7b` (better, but see [RAM usage](#ram-usage)). Change it, then `docker-compose up -d`.
 
 Below the settings: `system` (general rules), `experienceRules`, `resumeTask` (the CV steps) and `letterTask` (the cover letter).
 
