@@ -1,173 +1,188 @@
-# Générateur de CV et lettre de motivation (n8n + Gemini + Telegram + XeLaTeX)
+# CV & Cover Letter Generator
 
-Ce projet est un workflow d'automatisation n8n conçu pour générer instantanément un **CV adapté** et une **lettre de motivation (méthode Harvard)** au format PDF à partir d'une simple offre d'emploi envoyée sur Telegram.
-
----
-
-## 🌟 Fonctionnalités
-
-1. **Écoute Automatique (Polling Telegram) :** Vérifie régulièrement l'arrivée de nouvelles offres d'emploi ou de stage via un bot Telegram.
-2. **Analyse & Adaptation via AI (Google Gemini 1.5) :**
-   - **CV :** Adapte dynamiquement le profil, les compétences, les expériences et génère un projet sur-mesure parfaitement aligné avec l'offre (verbes d'action, métriques chiffrées, mots-clés techniques).
-   - **Lettre de Motivation :** Rédige une lettre synthétique, ultra-percutante et personnalisée selon les standards de la *Harvard Business School*.
-3. **Traitement JSON Robuste :** Nettoyage automatique des réponses de l'IA (suppression du Markdown, gestion des caractères Unicode invisibles).
-4. **Compilation PDF via API XeLaTeX :** Envoie des données structurées à un microservice XeLaTeX dédié pour compiler deux PDF au rendu professionnel.
-5. **Livraison Instantanée :** Envoi automatique des documents PDF générés directement dans le chat Telegram de l'utilisateur.
+Send a job offer to a Telegram bot → get back a CV and a cover letter tailored to it, as PDFs.
 
 ---
 
-## 📐 Architecture du Workflow
+## What you get
+
+For every job offer you send:
+
+1. **"Je traite cette offre..."** — the bot confirms it got the offer
+2. **CV (PDF)** — rewritten for the offer, built to match ATS keywords
+3. **Cover letter (PDF)**
+4. **ATS report** — keywords covered, and the list of things added beyond your real profile
+   (read it before an interview: a recruiter can ask about any line of the CV)
+
+If a step fails you get a **❌ Generation failed…** message instead. Just send the offer again.
+
+---
+
+## Three bots, three AI engines
+
+| Bot | Engine | Cost | Speed | Workflow file |
+|---|---|---|---|---|
+| Claude bot | Claude (your Claude Pro plan, via Claude Code) | included in Pro | ~2 min per document | `cv-cover-letter-claude-pro.json` |
+| Gemini bot | Google Gemini API | free tier | fast, but sometimes "high demand" | `cv-cover-letter-gemini.json` |
+| Local bot | Small open-source model (Ollama, runs on your PC) | free, offline | slow on CPU (several minutes) | `cv-cover-letter-local.json` |
+
+Each bot has its **own Telegram bot**. Run one, two or all three.
+
+---
+
+## How it works
 
 ```
-[ Telegram ] 💬 (Offre reçue)
-      │
-      ▼
-[ n8n Schedule Trigger ] ──► [ Polling API Telegram ]
-      │
-      ▼
-[ Filtre & Code JS ] (Mise à jour de l'offset)
-      │
-  ┌───┴───────────────────────────┐
-  ▼                               ▼
-[ Message d'attente ]    [ Prompt Gemini 1.5 - CV ]
-                                  │
-                                  ▼
-                         [ Nettoyage JSON JS ]
-                                  │
-                                  ▼
-                         [ API XeLaTeX (CV) ]
-                                  │
-                                  ▼
-                         [ Envoi PDF CV (Telegram) ]
-                                  │
-                                  ▼
-                         [ Prompt Gemini 1.5 - Lettre ]
-                                  │
-                                  ▼
-                         [ Nettoyage JSON JS ]
-                                  │
-                                  ▼
-                         [ API XeLaTeX (Lettre) ]
-                                  │
-                                  ▼
-                         [ Envoi PDF Lettre (Telegram) ]
+Telegram ──► n8n ──► AI engine ──► xelatex-api ──► PDFs ──► Telegram
+                     │
+                     ├─ claude-bridge  (Claude Code, Pro plan)
+                     ├─ Gemini API     (Google)
+                     └─ ollama         (local model)
 ```
 
----
+**The containers** (`docker-compose.yml`):
 
-## 🛠️ Stack Technique
+- **n8n** — runs the workflows (http://localhost:5678)
+- **xelatex-api** — turns the JSON into PDFs (`main.py`)
+- **claude-bridge** — lets n8n use Claude through your Pro login (`claude-bridge/server.js`)
+  - it also serves the **shared prompts** (`prompts/`) and holds the **job locks** for all bots,
+    so it must run even if you only use Gemini or the local bot
+- **ollama** — the local model (downloads `qwen2.5:3b`, ~2 GB, on first start)
 
-- **Orchestration :** [n8n](https://n8n.io/)
-- **Intelligence Artificielle :** Google Gemini API (`models/gemini-1.5-flash` / `gemini-1.5-pro`)
-- **Messagerie :** Telegram Bot API
-- **Génération PDF :** API REST basée sur **XeLaTeX** (Dockerized)
-- **Langage & Scripting :** JavaScript (Nodes Code n8n)
+**One offer at a time per bot:**
 
----
-
-## 📋 Prérequis
-
-1. Une instance **n8n** en cours d'exécution.
-2. Un bot Telegram créé via [@BotFather](https://t.me/BotFather) avec un token configuré uniquement dans n8n.
-3. Une clé d'API **Google Gemini** configurée dans les credentials n8n.
-4. Le service **XeLaTeX API** accessible sur votre réseau local/Docker (ex: `http://xelatex-api:8000`).
-
-> Le workflow fourni est un template public. Il ne contient aucun token, credential, profil candidat ou identifiant personnel.
+- every 15 s, the workflow tries to take its bot's lock
+- if a job is already running, it waits; your new messages stay queued in Telegram
+- the offer is marked as read in Telegram *before* generating, so it is never processed twice
+- the lock is released when the PDFs are sent (or right away if something fails)
 
 ---
 
-## 🚀 Installation & Configuration
+## Files
 
-### 1. Préparer les informations du candidat
+| File | What it is |
+|---|---|
+| `docker-compose.yml` | all the containers |
+| `main.py`, `Dockerfile` | the PDF compiler (LaTeX) |
+| `prompts/profile.md` | **your profile** (plain text) |
+| `prompts/prompts.js` | **all the prompts and settings**, shared by the three bots |
+| `claude-bridge/` | the Claude bridge, prompt server and job locks |
+| `cv-cover-letter-*.json` | the three n8n workflows |
+| `.env.example` | settings template → copy to `.env` |
 
-Copiez `.env.example` vers `.env` :
+---
+
+## First-time setup
+
+### 1. Settings
 
 ```bash
 cp .env.example .env
 ```
 
-Sous PowerShell :
+Fill in `.env`:
 
-```powershell
-Copy-Item .env.example .env
-```
+- your contact details (`CV_*`)
+- `CLAUDE_CODE_OAUTH_TOKEN` — only for the Claude bot:
+  ```bash
+  npm i -g @anthropic-ai/claude-code
+  claude setup-token     # log in with your Pro account, copy the token
+  ```
+- `OLLAMA_MODEL` — only for the local bot (default `qwen2.5:3b`)
 
-Ouvrez `.env` et remplacez chaque valeur `YOUR_*` :
-
-| Variable | À remplacer par |
-| --- | --- |
-| `CV_NAME` | Nom affiché sur le CV et la lettre |
-| `CV_LOCATION` | Ville et pays affichés |
-| `CV_EMAIL` | Adresse e-mail professionnelle |
-| `CV_GITHUB` | URL GitHub, sans `https://` obligatoire |
-| `CV_LINKEDIN` | URL LinkedIn, sans `https://` obligatoire |
-| `CV_COMPANY_1`, `CV_COMPANY_2`, `CV_COMPANY_3` | Noms des expériences professionnelles |
-| `CV_PROJECT_URL` | URL d'un projet public |
-| `CV_SCHOOL` | Établissement de formation principal |
-| `CV_SECONDARY_SCHOOL` | Établissement secondaire, si nécessaire |
-| `CV_DISTINCTION` | Distinction ou prix à afficher |
-| `CV_COMMUNITY` | Association ou communauté technique |
-
-Le fichier `.env` est ignoré par Git et ne doit jamais être publié. Les descriptions détaillées des expériences, compétences et projets sont envoyées par le workflow n8n, pas par `.env`.
-
-### 2. Importer et personnaliser le workflow
-
-1. Importez [workflow.template.json](workflow.template.json) dans n8n via **Workflows** > **Import from File / JSON**.
-2. Dans le nœud **Get Telegram Updates**, remplacez `YOUR_TELEGRAM_BOT_TOKEN` par le token de votre bot.
-3. Dans les nœuds **Generate Resume JSON** et **Generate Cover Letter JSON**, remplacez `YOUR_CANDIDATE_PROFILE` par votre profil, vos expériences, vos compétences et vos projets.
-4. Faites ce remplacement dans les deux nœuds : le premier génère le CV, le second génère la lettre.
-5. Conservez uniquement des informations que vous avez le droit de transmettre à Google Gemini.
-
-Le workflow est désactivé par défaut (`active: false`). Testez-le manuellement dans n8n avant de l'activer.
-
-### 3. Configurer les credentials n8n
-
-Après l'import, associez vos propres credentials aux nœuds concernés :
-
-- Nœuds **Generate Resume JSON** et **Generate Cover Letter JSON** : credential Google Gemini.
-- Nœuds **Acknowledge Message**, **Send Resume PDF** et **Send Cover Letter PDF** : credential Telegram.
-
-Les credentials doivent être créés directement dans n8n. Ne les ajoutez pas au fichier JSON et ne les commitez jamais dans Git.
-
-### 4. Configurer l'API XeLaTeX
-
-Copiez `.env.example` vers `.env`, complétez-le, puis démarrez les services :
+### 2. Start
 
 ```bash
-docker compose up --build -d
+docker volume create n8n_data
+docker-compose up -d --build
 ```
 
-Assurez-vous que vos nœuds `HTTP Request` pointent vers les bons endpoints de compilation :
-- Compile CV : `http://xelatex-api:8000/compile-resume`
-- Compile Lettre : `http://xelatex-api:8000/compile-cover-letter`
+Check: `docker ps` should list `n8n`, `xelatex-api`, `claude-bridge` and `ollama`.
 
-Si n8n tourne hors de Docker, remplacez `http://xelatex-api:8000` par `http://localhost:8000` dans les deux nœuds HTTP Request.
+> First start: `ollama` downloads its model (~2 GB) in the background.
+> The local bot answers ❌ until it's done. Follow it with `docker-compose logs -f ollama`.
 
-### 5. Vérifier avant publication
+### 3. Create the Telegram bots
 
-Avant de pousser le projet, vérifiez que :
+In Telegram, talk to **@BotFather** → `/newbot` → copy the token. One bot per engine you want.
 
-- `.env` n'est pas suivi par Git (`git status` ne doit pas l'afficher).
-- Le JSON ne contient plus `YOUR_TELEGRAM_BOT_TOKEN` ni de token réel.
-- `YOUR_CANDIDATE_PROFILE` a été remplacé uniquement dans votre copie locale du workflow.
-- Aucun PDF, log, message Telegram ou clé API n'est présent dans le dépôt.
+### 4. Import the workflows into n8n
 
----
+Open http://localhost:5678 → **Import from file** → pick a `cv-cover-letter-*.json`. Then in that workflow:
 
-## 📱 Utilisation
+1. **Get Telegram Updates** and **Confirm Updates** → replace `YOUR_TELEGRAM_BOT_TOKEN` in the URL with the bot's token
+2. Create a **Telegram credential** with the same token and select it on every Telegram node
+   (Acknowledge Message, Send Resume PDF, Send Cover Letter PDF, Send ATS Report, Notify Failure)
+3. Gemini only: create a **Google Gemini API** credential (key from https://aistudio.google.com) and select it on the 4 Gemini nodes
+4. **Activate / publish** the workflow
 
-1. Envoyez un message contenant une **offre de stage ou d'emploi** (texte de plus de 20 caractères) à votre Bot Telegram.
-2. Le Bot répond immédiatement : `"je m'occupe de cette offre ! Tkika ..."`.
-3. Quelques secondes plus tard, vous recevrez successivement dans votre discussion :
-   - Your **CV optimisé** en format PDF.
-   - Votre **Lettre de Motivation** sur-mesure en format PDF.
+Your profile goes in `prompts/profile.md` (see below), not in n8n.
+
+> ⚠️ Never put the same Telegram bot in two active workflows: they would steal each other's messages.
 
 ---
 
-## Sécurité
+## Daily use
 
-Ne placez jamais de token Telegram, clé Gemini, mot de passe ou offre d'emploi privée dans le dépôt. Si un secret a déjà été publié, révoquez-le puis nettoyez l'historique Git avant de rendre le dépôt public.
+| Do | Command |
+|---|---|
+| Start everything | `docker-compose up -d` |
+| Stop everything | `docker-compose down` (workflows and settings are kept) |
+| Follow the logs | `docker-compose logs -f` |
+| After changing `main.py` or `claude-bridge/` | `docker-compose up -d --build` |
+| After changing `OLLAMA_MODEL` in `.env` | `docker-compose up -d` (downloads the new model) |
+| After editing `prompts/` | nothing, it applies on the next offer |
 
-## Licence
+Then just send a job offer (more than 20 characters) to a bot.
 
-Ce projet est sous licence MIT - voir le fichier [LICENSE](LICENSE) pour plus de détails.
+---
+
+## Customize
+
+Everything is in the **`prompts/`** folder, shared by the three bots.
+Edit, save, send an offer: changes apply right away (no restart, no re-import).
+
+**`prompts/profile.md`** — your real profile (experience, skills, education…). The AI only starts from this.
+
+**`prompts/prompts.js`** — settings at the top:
+
+- **`TAILORING`**
+  - `'aggressive'` (default) — job titles and tasks are rewritten to match the offer.
+    Company names, dates, locations, education, certifications and "Intern" status are never changed. No invented numbers.
+  - `'strict'` — only rephrases and reorders what is really in your profile.
+- **`MODELS`**
+  - `claude`: `'sonnet'` or `'haiku'` (lighter on your Pro limits)
+  - `local`: comes from `OLLAMA_MODEL` in `.env`, e.g. `qwen2.5:7b` (better, needs ~8 GB of free RAM). Change it, then `docker-compose up -d`.
+
+Below the settings: `system` (general rules), `experienceRules`, `resumeTask` (the CV steps) and `letterTask` (the cover letter).
+
+**Gemini model** — in the n8n **Gemini - … JSON** nodes. If it fails 3 times, the **(fallback)** nodes use `gemini-3.1-flash-lite`.
+
+**Changed a workflow in n8n?** Export it (**⋯ → Download**) over its `cv-cover-letter-*.json` to keep the repo in sync.
+Remove the bot token from the URLs before committing.
+
+---
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| ❌ *Build Prompts* failed | Syntax error in `prompts/prompts.js`, or `prompts/profile.md` is empty. The message says which |
+| Only "Je traite cette offre..." and nothing else | Check `docker-compose logs -f n8n claude-bridge`, or the workflow's **Executions** tab in n8n |
+| Same offer processed several times | Two active workflows use the same bot → deactivate one |
+| Gemini: *"model is currently experiencing high demand"* | Google is overloaded (common on free keys). The fallback model kicks in; otherwise retry later |
+| Claude: error 429 / limit | Your Pro usage limit is reached (shared with claude.ai). Wait, or set `claude: 'haiku'` in `MODELS` |
+| Local bot: ❌ *model not found* / *connection refused* | Ollama is still downloading the model, or isn't running: `docker-compose logs -f ollama` |
+| Local bot very slow | Normal on CPU. Use a smaller model (`qwen2.5:1.5b`) or the Claude/Gemini bot |
+| A bot stays silent after a crash | Its lock frees itself after 30 min, or free it now: `docker-compose exec n8n wget -qO- --post-data='' 'http://claude-bridge:8080/unlock?key=claude'` (`gemini` / `local`) |
+| `KeyError: 'ContainerConfig'` | Old docker-compose bug: `docker-compose down` then `docker-compose up -d` |
+
+---
+
+## Good to know
+
+- **Claude Pro limits are shared** with your normal Claude use. Each offer = 2 generations.
+- **Never set `ANTHROPIC_API_KEY`** in the bridge: you would be billed API prices.
+- **Keep the bridge private** — it uses your personal subscription.
+- **Your profile is in `prompts/profile.md`.** Remove it before publishing the repo.
+- **Telegram tokens are secrets.** If one leaks: @BotFather → `/revoke`, then update the workflow.

@@ -2,409 +2,376 @@ import os
 import re
 import subprocess
 import tempfile
-from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List
 from urllib.parse import quote
-from fastapi import FastAPI, HTTPException, Response
-from pydantic import BaseModel
+
+from fastapi import Body, FastAPI, HTTPException, Response
 
 app = FastAPI()
 
-CV_NAME = os.getenv("CV_NAME", "YOUR_NAME")
-CV_LOCATION = os.getenv("CV_LOCATION", "YOUR_CITY, YOUR_COUNTRY")
-CV_EMAIL = os.getenv("CV_EMAIL", "your.email@example.com")
-CV_GITHUB = os.getenv("CV_GITHUB", "github.com/your-account")
-CV_LINKEDIN = os.getenv("CV_LINKEDIN", "linkedin.com/in/your-profile")
-CV_COMPANY_1 = os.getenv("CV_COMPANY_1", "YOUR_COMPANY_1")
-CV_COMPANY_2 = os.getenv("CV_COMPANY_2", "YOUR_COMPANY_2")
-CV_COMPANY_3 = os.getenv("CV_COMPANY_3", "YOUR_COMPANY_3")
-CV_PROJECT_URL = os.getenv("CV_PROJECT_URL", "your-project.example.com")
-CV_SCHOOL = os.getenv("CV_SCHOOL", "YOUR_SCHOOL")
-CV_SECONDARY_SCHOOL = os.getenv("CV_SECONDARY_SCHOOL", "YOUR_SECONDARY_SCHOOL")
-CV_DISTINCTION = os.getenv("CV_DISTINCTION", "YOUR_DISTINCTION")
-CV_COMMUNITY = os.getenv("CV_COMMUNITY", "YOUR_TECH_COMMUNITY")
+# Identity comes from .env (used as fallback for the resume, and for the cover letter)
+ENV = {k: os.getenv(k, "") for k in
+       ["CV_NAME", "CV_LOCATION", "CV_EMAIL", "CV_PHONE", "CV_GITHUB", "CV_LINKEDIN"]}
 
-LATEX_TEMPLATE = r"""
-\documentclass[10pt, a4paper]{article}
-\usepackage[a4paper, left=1.5cm, right=1.5cm, top=1.5cm, bottom=1.5cm]{geometry}
-\usepackage{fontspec}
-\usepackage{polyglossia}
-\setdefaultlanguage{french}
-\usepackage{hyperref}
-\usepackage{enumitem}
-\usepackage{titlesec}
-\usepackage{xcolor}
-\usepackage{setspace}
 
-\setstretch{1.15}
-\definecolor{primary}{RGB}{33, 37, 41}
-\definecolor{linkcolor}{RGB}{30, 80, 160}
-
-\hypersetup{
-    colorlinks=true,
-    linkcolor=linkcolor,
-    urlcolor=linkcolor,
-    pdfauthor={{{ CV_NAME }}},
-    pdftitle={CV - {{ CV_NAME }} - Data Engineer}
+# ================================================================ escaping ===
+_UNESCAPE = [
+    (r"\textbackslash{}", "\\"), (r"\textasciitilde{}", "~"), (r"\textasciicircum{}", "^"),
+    (r"\&", "&"), (r"\%", "%"), (r"\$", "$"), (r"\#", "#"), (r"\_", "_"), (r"\{", "{"), (r"\}", "}"),
+]
+_TEX_MAP = {
+    "\\": r"\textbackslash{}", "%": r"\%", "&": r"\&", "_": r"\_", "#": r"\#",
+    "$": r"\$", "{": r"\{", "}": r"\}", "~": r"\textasciitilde{}", "^": r"\textasciicircum{}",
 }
+_TEX_RE = re.compile(r"[\\%&_#${}~^]")
 
-\pagestyle{empty}
-\setlength{\parindent}{0pt}
-\setlength{\parskip}{0pt}
 
-\titleformat{\section}{\large\bfseries\scshape\color{primary}}{}{0em}{}[\titlerule]
-\titlespacing*{\section}{0pt}{10pt}{5pt}
-
-\setlist[itemize]{leftmargin=1.2em, labelsep=0.4em, topsep=2pt, itemsep=3pt, parsep=1pt}
-
-\begin{document}
-
-\begin{center}
-    {\Huge \bfseries \scshape {{ CV_NAME }}} \\[3pt]
-    \small {{ CV_LOCATION }} ~$\diamond$~ {{ CV_EMAIL }} ~$\diamond$~ {{ CV_GITHUB }} ~$\diamond$~ {{ CV_LINKEDIN }}
-\end{center}
-
-\vspace{-4pt}
-
-\section*{Profil}
-{{ PROFILE_SUMMARY }}
-
-\section*{Compétences}
-\begin{itemize}[leftmargin=0pt, label={}]
-    \item \textbf{Gouvernance \& Data Management :} {{ SKILLS_GOVERNANCE }}
-    \item \textbf{Data Engineering \& Automation :} {{ SKILLS_DATA_ENG }}
-    \item \textbf{Langages \& Frameworks :} {{ SKILLS_LANGUAGES_FRAMEWORKS }}
-    \item \textbf{Langues :} Français : Maternelle ~$\diamond$~ Anglais : C1 ~$\diamond$~ Arabe : Maternelle ~$\diamond$~ Italien : B1
-\end{itemize}
-
-\section*{Expérience Professionnelle}
-
-\textbf{Data Engineer (Stage)} \hfill Juin 2026 -- Août 2026 \\
-	extit{{{ CV_COMPANY_1 }}} \hfill \textit{{{ CV_LOCATION }}}
-{{ EXP_TEAMWILL }}
-
-\vspace{3pt}
-
-\textbf{Data Engineer / Développeur Python (Temps partiel)} \hfill Jan 2023 -- Juin 2026 \\
-	extit{{{ CV_COMPANY_2 }}} \hfill \textit{{{ CV_LOCATION }}}
-{{ EXP_NINGEN }}
-
-\vspace{3pt}
-
-\textbf{Data Science (Stage)} \hfill Juin 2023 -- Juil 2023 \\
-	extit{{{ CV_COMPANY_3 }}} \hfill \textit{{{ CV_LOCATION }}}
-{{ EXP_BIAT }}
-
-\begin{samepage}
-\section*{Projets}
-	extbf{YOUR_PROJECT_NAME} (\href{https://{{ CV_PROJECT_URL }}}{{ CV_PROJECT_URL }}) -- \textit{Projet SaaS B2B}
-\begin{itemize}
-    \item Création d'un outil SaaS générant des photos de mannequins IA à partir d'une simple photo de vêtement.
-    \item Conduite de campagnes Outbound B2B, itérations basées sur les retours utilisateurs : acquisition de 50 utilisateurs actifs et conversion de 2 clients payants.
-\end{itemize}
-
-\vspace{2pt}
-
-\textbf{Data Warehouse Medallion Architecture} -- \textit{Projet Technique}
-\begin{itemize}
-    \item Conception d'un Data Warehouse académique de bout en bout structuré en couches Bronze, Silver et Gold pour optimiser le reporting analytique.
-\end{itemize}
-
-{{ CUSTOM_PROJECT_BLOCK }}
-\end{samepage}
-
-\section*{Formation \& Certifications}
-\textbf{Diplôme d'Ingénieur en Informatique} (Option Data Engineering) \hfill Diplôme prévu : Fév 2027 \\
-	extit{{{ CV_SCHOOL }}} \hfill \textit{{{ CV_LOCATION }}}
-
-\vspace{2pt}
-\textbf{Baccalauréat Français} (Spécialité Mathématiques \& Économie) \hfill 2013 -- 2022 \\
-	extit{{{ CV_SECONDARY_SCHOOL }}}
-
-\vspace{2pt}
-\textbf{Préparation à la Certification :} Microsoft Azure Databricks Data Engineer Associate (DP-750)
-
-\section*{Engagement \& Distinctions}
-\begin{itemize}
-    \item \textbf{{{ CV_DISTINCTION }}} : YOUR_DISTINCTION_DESCRIPTION
-    \item \textbf{{{ CV_COMMUNITY }}} : YOUR_COMMUNITY_DESCRIPTION
-\end{itemize}
-
-\end{document}
-"""
-
-class ResumeData(BaseModel):
-    PROFILE_SUMMARY: str
-    SKILLS_LIST: Optional[str] = ""
-    SKILLS_GOVERNANCE: Optional[str] = ""
-    SKILLS_DATA_ENG: Optional[str] = ""
-    SKILLS_LANGUAGES_FRAMEWORKS: Optional[str] = ""
-    EXP_TEAMWILL: Optional[List[str]] = []
-    EXP_NINGEN: Optional[List[str]] = []
-    EXP_BIAT: Optional[List[str]] = []
-    # Nouveaux champs pour le projet choisi par l'IA
-    CUSTOM_PROJECT_TITLE: Optional[str] = ""
-    CUSTOM_PROJECT_DESC: Optional[str] = ""
-
-def sanitize_latex(text: str) -> str:
-    if not isinstance(text, str):
+def raw(text: Any) -> str:
+    """Undo any LaTeX escaping already applied upstream (n8n), so we never double-escape."""
+    if text is None:
         return ""
-    replacements = {
-        "\\": r"\textbackslash{}",
-        "%": r"\%",
-        "&": r"\&",
-        "_": r"\_",
-        "#": r"\#",
-        "$": r"\$",
-        "{": r"\{",
-        "}": r"\}",
-        "~": r"\textasciitilde{}",
-        "^": r"\textasciicircum{}",
-    }
-    for key, val in replacements.items():
-        text = text.replace(key, val)
-    return text
+    text = str(text)
+    for esc, ch in _UNESCAPE:
+        text = text.replace(esc, ch)
+    return text.strip()
 
-def format_items(items: List[str]) -> str:
+
+def tex(text: Any) -> str:
+    """Escape plain text for LaTeX exactly once (safe for raw or pre-escaped input)."""
+    return _TEX_RE.sub(lambda m: _TEX_MAP[m.group()], raw(text))
+
+
+def tex_url(url: str) -> str:
+    url = re.sub(r"[\s\\{}]", "", raw(url))
+    return url.replace("%", r"\%").replace("#", r"\#")
+
+
+def clean_keys(obj: Any) -> Any:
+    """Normalise keys like 'PROFILE\\_SUMMARY' back to 'PROFILE_SUMMARY'."""
+    if isinstance(obj, dict):
+        return {raw(k): clean_keys(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [clean_keys(v) for v in obj]
+    return obj
+
+
+def first(d: dict, *keys, default=""):
+    for k in keys:
+        v = d.get(k)
+        if v not in (None, "", [], {}):
+            return v
+    return default
+
+
+def as_list(v: Any) -> List[str]:
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [v] if v.strip() else []
+    if isinstance(v, list):
+        out = []
+        for x in v:
+            if isinstance(x, dict):
+                x = first(x, "name", "title", "label", "value")
+            if x and str(x).strip():
+                out.append(str(x))
+        return out
+    return [str(v)]
+
+
+def is_english(text: str) -> bool:
+    t = " " + raw(text).lower() + " "
+    fr = len(re.findall(r"[éèêàùçôî]", t)) + sum(t.count(w) for w in [" le ", " la ", " les ", " des ", " et ", " du "])
+    en = sum(t.count(w) for w in [" the ", " and ", " of ", " with ", " for ", " in "])
+    return en > fr
+
+
+# ================================================================ helpers ===
+def github_link(value: str) -> str:
+    value = raw(value)
+    if not value:
+        return ""
+    label = re.sub(r"^https?://", "", value)
+    if "github.com" not in label:
+        label = f"github.com/{label}"
+    return rf"\href{{https://{tex_url(label)}}}{{{tex(label)}}}"
+
+
+def linkedin_link(value: str) -> str:
+    value = raw(value)
+    if not value:
+        return ""
+    if "linkedin.com" in value:
+        label = re.sub(r"^https?://", "", value)
+        return rf"\href{{https://{tex_url(label)}}}{{{tex(label)}}}"
+    return "LinkedIn : " + tex(value)
+
+
+def contact_line(location="", email="", phone="", github="", linkedin="") -> str:
+    parts = []
+    if raw(location):
+        parts.append(tex(location))
+    if raw(email):
+        parts.append(rf"\href{{mailto:{tex_url(email)}}}{{{tex(email)}}}")
+    if raw(phone):
+        parts.append(tex(phone))
+    if raw(github):
+        parts.append(github_link(github))
+    if raw(linkedin):
+        parts.append(linkedin_link(linkedin))
+    return r" ~$\diamond$~ ".join(parts)
+
+
+def itemize(items: List[str]) -> str:
+    items = [i for i in items if raw(i)]
     if not items:
         return ""
-    formatted = [f"    \\item {sanitize_latex(item)}" for item in items]
-    return "\\begin{itemize}\n" + "\n".join(formatted) + "\n\\end{itemize}"
+    return "\\begin{itemize}\n" + "\n".join(rf"  \item {tex(i)}" for i in items) + "\n\\end{itemize}"
 
-def render_identity(template: str) -> str:
-    identity = {
-        "{{ CV_NAME }}": CV_NAME,
-        "{{ CV_LOCATION }}": CV_LOCATION,
-        "{{ CV_EMAIL }}": CV_EMAIL,
-        "{{ CV_GITHUB }}": CV_GITHUB,
-        "{{ CV_LINKEDIN }}": CV_LINKEDIN,
-        "{{ CV_COMPANY_1 }}": CV_COMPANY_1,
-        "{{ CV_COMPANY_2 }}": CV_COMPANY_2,
-        "{{ CV_COMPANY_3 }}": CV_COMPANY_3,
-        "{{ CV_PROJECT_URL }}": CV_PROJECT_URL,
-        "{{ CV_SCHOOL }}": CV_SCHOOL,
-        "{{ CV_SECONDARY_SCHOOL }}": CV_SECONDARY_SCHOOL,
-        "{{ CV_DISTINCTION }}": CV_DISTINCTION,
-        "{{ CV_COMMUNITY }}": CV_COMMUNITY,
-    }
-    for placeholder, value in identity.items():
-        template = template.replace(placeholder, sanitize_latex(value))
-    return template
 
-@app.post("/compile-resume")
-async def compile_resume(data: ResumeData):
-    tex_content = render_identity(LATEX_TEMPLATE)
-    
-    # Remplacement des textes
-    tex_content = tex_content.replace("{{ PROFILE_SUMMARY }}", sanitize_latex(data.PROFILE_SUMMARY))
-    tex_content = tex_content.replace("{{ SKILLS_GOVERNANCE }}", sanitize_latex(data.SKILLS_GOVERNANCE))
-    tex_content = tex_content.replace("{{ SKILLS_DATA_ENG }}", sanitize_latex(data.SKILLS_DATA_ENG))
-    tex_content = tex_content.replace("{{ SKILLS_LANGUAGES_FRAMEWORKS }}", sanitize_latex(data.SKILLS_LANGUAGES_FRAMEWORKS))
-    
-    # Injection dynamique du projet personnalisé si fourni par l'IA
-    if data.CUSTOM_PROJECT_TITLE and data.CUSTOM_PROJECT_DESC:
-        custom_block = f"\\vspace{{2pt}}\n\n\\textbf{{{sanitize_latex(data.CUSTOM_PROJECT_TITLE)}}} -- \\textit{{Projet Spécifique}}\n\\begin{{itemize}}\n    \\item {sanitize_latex(data.CUSTOM_PROJECT_DESC)}\n\\end{{itemize}}"
-        tex_content = tex_content.replace("{{ CUSTOM_PROJECT_BLOCK }}", custom_block)
-    else:
-        tex_content = tex_content.replace("{{ CUSTOM_PROJECT_BLOCK }}", "")
+def two_col(left: str, right: str) -> str:
+    return rf"{left} \hfill {right}" if right else left
 
-    # Expériences
-    tex_content = tex_content.replace("{{ EXP_TEAMWILL }}", format_items(data.EXP_TEAMWILL))
-    tex_content = tex_content.replace("{{ EXP_NINGEN }}", format_items(data.EXP_NINGEN))
-    tex_content = tex_content.replace("{{ EXP_BIAT }}", format_items(data.EXP_BIAT))
 
+def compile_tex(tex_content: str, name: str, label: str) -> bytes:
     with tempfile.TemporaryDirectory() as temp_dir:
-        tex_file = os.path.join(temp_dir, "document.tex")
-        pdf_file = os.path.join(temp_dir, "document.pdf")
-        log_file = os.path.join(temp_dir, "document.log")
-
+        tex_file = os.path.join(temp_dir, f"{name}.tex")
+        pdf_file = os.path.join(temp_dir, f"{name}.pdf")
+        log_file = os.path.join(temp_dir, f"{name}.log")
         with open(tex_file, "w", encoding="utf-8") as f:
             f.write(tex_content)
 
-        compile_cmd = [
-            "xelatex",
-            "-interaction=nonstopmode",
-            "-halt-on-error",
-            f"-output-directory={temp_dir}",
-            tex_file
-        ]
-
-        subprocess.run(compile_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        subprocess.run(compile_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        cmd = ["xelatex", "-interaction=nonstopmode", "-halt-on-error",
+               f"-output-directory={temp_dir}", tex_file]
+        for _ in range(2):
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
 
         if not os.path.exists(pdf_file):
-            error_log = "Erreur de compilation inconnue."
+            detail = "Erreur de compilation inconnue."
             if os.path.exists(log_file):
                 with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
                     lines = f.readlines()
-                    errors = [l.strip() for l in lines if l.startswith("!")]
-                    if errors:
-                        error_log = "\n".join(errors[:5])
-
-            raise HTTPException(status_code=422, detail=f"Échec XeLaTeX :\n{error_log}")
+                for i, line in enumerate(lines):
+                    if line.startswith("!"):
+                        detail = "".join(lines[i:i + 6]).strip()   # error + "l.<n>" context
+                        break
+            raise HTTPException(status_code=422, detail=f"Échec XeLaTeX ({label}) :\n{detail}")
 
         with open(pdf_file, "rb") as f:
-            pdf_bytes = f.read()
-
-    filename = "CV_generated.pdf"
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quote(filename)}'
-        }
-    )
+            return f.read()
 
 
+def pdf_response(pdf: bytes, filename: str) -> Response:
+    return Response(content=pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quote(filename)}'})
 
-# --- NOUVEAU MODÈLE ET TEMPLATE POUR LA LETTRE DE MOTIVATION ---
 
-COVER_LETTER_TEMPLATE = r"""
-\documentclass[11pt,a4paper]{article}
-
-% --- PACKAGES DE BASE & POLICES ---
-\usepackage[top=2cm, bottom=2cm, left=2.2cm, right=2.2cm]{geometry}
-\usepackage{fontspec}
+PREAMBLE = r"""\usepackage{fontspec}
 \usepackage{polyglossia}
-\setdefaultlanguage{french}
-
+\setdefaultlanguage{%s}
 \usepackage{xcolor}
-\usepackage{hyperref}
-\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{enumitem}"""
 
-% --- COULEURS ET STYLES ---
-\definecolor{primary}{RGB}{30, 41, 59}       % Bleu nuit / Slate
-\definecolor{secondary}{RGB}{71, 85, 105}    % Gris discret
-\definecolor{accent}{RGB}{37, 99, 235}       % Bleu accentuation
 
-\hypersetup{
-    colorlinks=true,
-    linkcolor=accent,
-    urlcolor=accent,
-    pdfauthor={{{ CV_NAME }}},
-    pdftitle={Lettre de Motivation - {{ CV_NAME }}}
-}
+# ================================================================== resume ===
+def normalize_resume(body: dict) -> dict:
+    """Accept every shape the LLM has produced so far."""
+    b = clean_keys(body)
+    pi = b.get("personal_information") or b.get("basics") or {}
 
-\pagestyle{empty}
-\setlength{\parindent}{0pt}
-\setlength{\parskip}{0.8em}
+    summary = first(b, "PROFILE_SUMMARY", "summary") or first(pi, "summary")
+    if not raw(summary):
+        raise HTTPException(status_code=422, detail="PROFILE_SUMMARY manquant.")
 
-% Configuration des puces pour la section VALUE si liste à puces utilisée
-\setlist[itemize]{
-    leftmargin=*,
-    label=\small$\blacksquare$,
-    itemsep=0.3em,
-    topsep=0.2em,
-    partopsep=0pt,
-    parsep=0pt
-}
+    # skills: {"Cat": [..]}  or  [{"category": "Cat", "skills": [..]}]  or  ["a", "b"]
+    skills_in, skills = b.get("skills") or {}, {}
+    if isinstance(skills_in, dict):
+        skills = {k: as_list(v) for k, v in skills_in.items()}
+    elif isinstance(skills_in, list):
+        for s in skills_in:
+            if isinstance(s, dict):
+                skills[first(s, "category", "name", default="Compétences")] = as_list(first(s, "skills", "keywords", "items", default=[]))
+            elif s:
+                skills.setdefault("", []).append(str(s))
 
-\begin{document}
+    experience = []
+    for e in b.get("experience") or b.get("work") or []:
+        if not isinstance(e, dict):
+            continue
+        dates = first(e, "dates")
+        if not dates and (e.get("startDate") or e.get("endDate")):
+            dates = f"{e.get('startDate', '')} – {e.get('endDate', '')}".strip(" –")
+        experience.append({
+            "title": first(e, "title", "position", "role"),
+            "company": first(e, "company", "name", "organization"),
+            "location": first(e, "location"),
+            "dates": dates,
+            "bullets": as_list(first(e, "responsibilities", "highlights", "bullets", "description", default=[])),
+        })
 
-% --- EN-TÊTE ---
-{\Huge \bfseries \color{primary} {{ CV_NAME }}} \\[0.3em]
-{\small \color{secondary} {{ CV_LOCATION }} \quad$\cdot$\quad \href{mailto:{{ CV_EMAIL }}}{{ CV_EMAIL }} \quad$\cdot$\quad \href{https://{{ CV_GITHUB }}}{{ CV_GITHUB }} \quad$\cdot$\quad \href{https://{{ CV_LINKEDIN }}}{{ CV_LINKEDIN }}}
+    education = []
+    for ed in b.get("education") or []:
+        if not isinstance(ed, dict):
+            continue
+        dates = first(ed, "dates")
+        if not dates and (ed.get("startDate") or ed.get("endDate")):
+            dates = f"{ed.get('startDate', '')} – {ed.get('endDate', '')}".strip(" –")
+        education.append({
+            "degree": first(ed, "degree", "area", "studyType"),
+            "institution": first(ed, "institution", "school"),
+            "dates": dates,
+        })
 
-\vspace{0.6cm}
-\rule{\textwidth}{0.6pt}
-\vspace{0.4cm}
+    lang = first(b, "SECTION_LANG", "LANG")
+    english = raw(lang).lower().startswith("en") if lang else is_english(summary)
 
-% --- METADATÉ & DESTINATAIRE ---
-\textbf{\today} \hfill \textbf{À l'attention de :} {{ RECIPIENT_NAME }} \\
-\null \hfill \textbf{{{ COMPANY_NAME }}}
+    return {
+        "name": first(pi, "full_name", "name") or ENV["CV_NAME"],
+        "headline": first(b, "HEADLINE") or first(pi, "title", "label"),
+        "location": first(pi, "location") or ENV["CV_LOCATION"],
+        "email": first(pi, "email") or ENV["CV_EMAIL"],
+        "phone": first(pi, "phone") or ENV["CV_PHONE"],
+        "github": first(pi, "github") or ENV["CV_GITHUB"],
+        "linkedin": first(pi, "linkedin") or ENV["CV_LINKEDIN"],
+        "summary": summary,
+        "skills": skills,
+        "experience": experience,
+        "education": education,
+        "certifications": as_list(b.get("certifications")),
+        "languages": as_list(b.get("languages")),
+        "english": english,
+    }
 
-\vspace{0.6cm}
 
-\textbf{\color{primary}Objet : Candidature au poste de {{ JOB_TITLE }}}
+def render_resume(d: dict) -> str:
+    h = ({"profile": "Profile", "skills": "Skills", "exp": "Professional Experience",
+          "edu": "Education", "certs": "Certifications", "langs": "Languages"} if d["english"] else
+         {"profile": "Profil", "skills": "Compétences", "exp": "Expérience professionnelle",
+          "edu": "Formation", "certs": "Certifications", "langs": "Langues"})
+    out = [
+        r"\documentclass[10pt,a4paper]{article}",
+        r"\usepackage[a4paper,left=1.5cm,right=1.5cm,top=1.4cm,bottom=1.4cm]{geometry}",
+        PREAMBLE % ("english" if d["english"] else "french"),
+        r"\usepackage{titlesec}",
+        r"\usepackage{setspace}",
+        r"\setstretch{1.12}",
+        r"\definecolor{primary}{RGB}{33,37,41}",
+        r"\pagestyle{empty}",
+        r"\setlength{\parindent}{0pt}",
+        r"\titleformat{\section}{\large\bfseries\scshape\color{primary}}{}{0em}{}[\titlerule]",
+        r"\titlespacing*{\section}{0pt}{9pt}{4pt}",
+        r"\setlist[itemize]{leftmargin=1.2em,labelsep=0.4em,topsep=1pt,itemsep=1pt,parsep=0pt}",
+        r"\newcommand{\needlines}[1]{\par\ifdim\dimexpr\pagegoal-\pagetotal\relax<#1\baselineskip\newpage\fi}",
+        rf"\hypersetup{{pdfauthor={{{tex(d['name'])}}},pdftitle={{CV - {tex(d['name'])}}}}}",
+        r"\begin{document}",
+        r"\begin{center}",
+        rf"{{\Huge\bfseries\scshape {tex(d['name'])}}}\\[3pt]",
+    ]
+    if raw(d["headline"]):
+        out.append(rf"{{\large {tex(d['headline'])}}}\\[2pt]")
+    out += [r"\small " + contact_line(d["location"], d["email"], d["phone"], d["github"], d["linkedin"]),
+            r"\end{center}",
+            rf"\section*{{{h['profile']}}}", tex(d["summary"])]
 
-\vspace{0.4cm}
+    skills = {k: v for k, v in d["skills"].items() if v}
+    if skills:
+        out += [rf"\section*{{{h['skills']}}}", r"\begin{itemize}[leftmargin=0pt,label={}]"]
+        for cat, items in skills.items():
+            prefix = rf"\textbf{{{tex(cat)}}} : " if raw(cat) else ""
+            out.append(r"  \item " + prefix + ", ".join(tex(i) for i in items))
+        out.append(r"\end{itemize}")
 
-Madame, Monsieur,
+    if d["experience"]:
+        out.append(rf"\section*{{{h['exp']}}}")
+        for e in d["experience"]:
+            lines = [two_col(rf"\textbf{{{tex(e['title'])}}}", tex(e["dates"]))]
+            if raw(e["company"]) or raw(e["location"]):
+                lines.append(two_col(rf"\textit{{{tex(e['company'])}}}",
+                                     rf"\textit{{{tex(e['location'])}}}" if raw(e["location"]) else ""))
+            # keep the job header with its first bullet, but let the page break between jobs
+            out += [r"\needlines{5}", " \\\\*\n".join(lines) + r"\nopagebreak", itemize(e["bullets"]), r"\vspace{3pt}"]
 
-% Paragraphe 1 : L'Accroche (HOOK)
-{{ PARAGRAPH_HOOK }}
+    if d["education"]:
+        out.append(rf"\section*{{{h['edu']}}}")
+        for ed in d["education"]:
+            lines = [two_col(rf"\textbf{{{tex(ed['degree'])}}}", tex(ed["dates"]))]
+            if raw(ed["institution"]):
+                lines.append(rf"\textit{{{tex(ed['institution'])}}}")
+            out += [" \\\\\n".join(lines), r"\vspace{3pt}"]
 
-% Paragraphe 2 : La Preuve & Valeur Ajoutée (VALUE)
-{{ PARAGRAPH_VALUE }}
+    if d["certifications"]:
+        out += [rf"\section*{{{h['certs']}}}", itemize(d["certifications"])]
 
-% Paragraphe 3 : Alignement & Vision (ALIGNMENT)
-{{ PARAGRAPH_ALIGNMENT }}
+    if d["languages"]:
+        out += [rf"\section*{{{h['langs']}}}", r" ~$\diamond$~ ".join(tex(l) for l in d["languages"])]
 
-% Paragraphe 4 : Appel à l'action (CTA)
-{{ PARAGRAPH_CTA }}
+    out.append(r"\end{document}")
+    return "\n".join(out)
 
-\vspace{0.8cm}
 
-Bien cordialement,
+@app.post("/compile-resume")
+async def compile_resume(body: Dict[str, Any] = Body(...)):
+    return pdf_response(compile_tex(render_resume(normalize_resume(body)), "resume", "CV"),
+                        "CV_generated.pdf")
 
-\vspace{0.4cm}
-	extbf{{{ CV_NAME }}}
 
-\end{document}
-"""
+# ============================================================ cover letter ===
+def render_letter(b: dict) -> str:
+    b = clean_keys(b)
+    paras = [first(b, k) for k in ["PARAGRAPH_HOOK", "PARAGRAPH_VALUE", "PARAGRAPH_ALIGNMENT", "PARAGRAPH_CTA"]]
+    if not any(raw(p) for p in paras):
+        raise HTTPException(status_code=422, detail="Paragraphes de la lettre manquants.")
 
-class CoverLetterData(BaseModel):
-    COMPANY_NAME: Optional[str] = "L'équipe de Recrutement"
-    JOB_TITLE: str
-    RECIPIENT_NAME: Optional[str] = "Madame, Monsieur"
-    PARAGRAPH_HOOK: str
-    PARAGRAPH_VALUE: str
-    PARAGRAPH_ALIGNMENT: str
-    PARAGRAPH_CTA: str
+    lang = first(b, "LETTER_LANG", "LANG")
+    en = raw(lang).lower().startswith("en") if lang else is_english(" ".join(map(str, paras)))
+    t = ({"to": "To:", "subject": "Application for the position of", "greet": "Dear Hiring Manager,",
+          "close": "Kind regards,"} if en else
+         {"to": "À l'attention de :", "subject": "Objet : Candidature au poste de",
+          "greet": "Madame, Monsieur,", "close": "Bien cordialement,"})
+
+    recipient = raw(first(b, "RECIPIENT_NAME"))
+    company = raw(first(b, "COMPANY_NAME"))
+    job = raw(first(b, "JOB_TITLE"))
+    generic = recipient.lower() in ("", "madame, monsieur", "hiring manager", "madame, monsieur,")
+    greeting = t["greet"] if generic else (f"Dear {recipient}," if en else f"{recipient},")
+
+    right = []
+    if recipient and not generic:
+        right.append(rf"\textbf{{{t['to']}}} {tex(recipient)}")
+    if company:
+        right.append(rf"\textbf{{{tex(company)}}}")
+
+    name = ENV["CV_NAME"]
+    return "\n\n".join([
+        r"\documentclass[11pt,a4paper]{article}",
+        r"\usepackage[top=2cm,bottom=2cm,left=2.2cm,right=2.2cm]{geometry}",
+        PREAMBLE % ("english" if en else "french"),
+        r"\definecolor{primary}{RGB}{30,41,59}",
+        r"\definecolor{secondary}{RGB}{71,85,105}",
+        r"\pagestyle{empty}",
+        r"\setlength{\parindent}{0pt}",
+        r"\setlength{\parskip}{0.8em}",
+        r"\begin{document}",
+        rf"{{\Huge\bfseries\color{{primary}} {tex(name)}}}\\[0.3em]",
+        r"{\small\color{secondary} " + contact_line(ENV["CV_LOCATION"], ENV["CV_EMAIL"], ENV["CV_PHONE"],
+                                                     ENV["CV_GITHUB"], ENV["CV_LINKEDIN"]) + "}",
+        r"\vspace{0.4cm}\hrule\vspace{0.4cm}",
+        r"\today\par",
+        (r"\begin{flushright}" + " \\\\\n".join(right) + r"\end{flushright}") if right else "",
+        rf"\textbf{{\color{{primary}}{t['subject']} {tex(job)}}}" if job else "",
+        r"\vspace{0.3cm}",
+        tex(greeting),
+        "\n\n".join(tex(p) for p in paras if raw(p)),
+        r"\vspace{0.6cm}",
+        t["close"],
+        r"\vspace{0.3cm}",
+        rf"\textbf{{{tex(name)}}}",
+        r"\end{document}",
+    ])
 
 
 @app.post("/compile-cover-letter")
-async def compile_cover_letter(data: CoverLetterData):
-    tex_content = render_identity(COVER_LETTER_TEMPLATE)
-
-    # Remplacement des variables avec désinfection LaTeX
-    tex_content = tex_content.replace("{{ COMPANY_NAME }}", sanitize_latex(data.COMPANY_NAME))
-    tex_content = tex_content.replace("{{ JOB_TITLE }}", sanitize_latex(data.JOB_TITLE))
-    tex_content = tex_content.replace("{{ RECIPIENT_NAME }}", sanitize_latex(data.RECIPIENT_NAME))
-    tex_content = tex_content.replace("{{ PARAGRAPH_HOOK }}", sanitize_latex(data.PARAGRAPH_HOOK))
-    tex_content = tex_content.replace("{{ PARAGRAPH_VALUE }}", sanitize_latex(data.PARAGRAPH_VALUE))
-    tex_content = tex_content.replace("{{ PARAGRAPH_ALIGNMENT }}", sanitize_latex(data.PARAGRAPH_ALIGNMENT))
-    tex_content = tex_content.replace("{{ PARAGRAPH_CTA }}", sanitize_latex(data.PARAGRAPH_CTA))
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-        tex_file = os.path.join(temp_dir, "cover_letter.tex")
-        pdf_file = os.path.join(temp_dir, "cover_letter.pdf")
-        log_file = os.path.join(temp_dir, "cover_letter.log")
-
-        with open(tex_file, "w", encoding="utf-8") as f:
-            f.write(tex_content)
-
-        compile_cmd = [
-            "xelatex",
-            "-interaction=nonstopmode",
-            "-halt-on-error",
-            f"-output-directory={temp_dir}",
-            tex_file
-        ]
-
-        # Double passage pour la stabilisation de la mise en page
-        subprocess.run(compile_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        subprocess.run(compile_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-        if not os.path.exists(pdf_file):
-            error_log = "Erreur de compilation inconnue."
-            if os.path.exists(log_file):
-                with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
-                    lines = f.readlines()
-                    errors = [l.strip() for l in lines if l.startswith("!")]
-                    if errors:
-                        error_log = "\n".join(errors[:5])
-
-            raise HTTPException(status_code=422, detail=f"Échec XeLaTeX (Lettre) :\n{error_log}")
-
-        with open(pdf_file, "rb") as f:
-            pdf_bytes = f.read()
-
-    filename = "cover_letter_generated.pdf"
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quote(filename)}'
-        }
-    )
+async def compile_cover_letter(body: Dict[str, Any] = Body(...)):
+    return pdf_response(compile_tex(render_letter(body), "cover_letter", "Lettre"),
+                        "cover_letter_generated.pdf")
