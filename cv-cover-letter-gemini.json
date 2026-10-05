@@ -1,5 +1,5 @@
 {
-  "name": "CV and Cover Letter Generator - Claude (Pro plan)",
+  "name": "CV and Cover Letter Generator - Gemini",
   "nodes": [
     {
       "parameters": {
@@ -24,7 +24,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://claude-bridge:8080/lock?key=claude",
+        "url": "http://claude-bridge:8080/lock?key=gemini",
         "options": {}
       },
       "type": "n8n-nodes-base.httpRequest",
@@ -165,7 +165,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://claude-bridge:8080/unlock?key=claude",
+        "url": "http://claude-bridge:8080/unlock?key=gemini",
         "options": {}
       },
       "type": "n8n-nodes-base.httpRequest",
@@ -199,7 +199,7 @@
         "url": "http://claude-bridge:8080/prompts",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ engine: 'claude', chatId: $json.message.chat.id, jobOffer: $json.message.text }) }}",
+        "jsonBody": "={{ JSON.stringify({ engine: 'gemini', chatId: $json.message.chat.id, jobOffer: $json.message.text }) }}",
         "options": {}
       },
       "type": "n8n-nodes-base.httpRequest",
@@ -216,23 +216,36 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "http://claude-bridge:8080/v1/messages",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($('Build Prompts').item.json.resumeRequest) }}",
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-3.6-flash",
+          "mode": "list",
+          "cachedResultName": "models/gemini-3.6-flash"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "={{ $('Build Prompts').item.json.resumeRequest.messages[0].content }}"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "builtInTools": {},
         "options": {
-          "timeout": 900000
+          "systemMessage": "={{ $('Build Prompts').item.json.resumeRequest.system }}"
         }
       },
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.5,
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
       "position": [
         2100,
         272
       ],
-      "id": "claude-resume",
-      "name": "Claude - Resume JSON",
+      "id": "gemini-resume",
+      "name": "Gemini - Resume JSON",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
       "onError": "continueErrorOutput"
     },
     {
@@ -297,23 +310,36 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "http://claude-bridge:8080/v1/messages",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($('Build Prompts').item.json.letterRequest) }}",
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-3.6-flash",
+          "mode": "list",
+          "cachedResultName": "models/gemini-3.6-flash"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "={{ $('Build Prompts').item.json.letterRequest.messages[0].content }}"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "builtInTools": {},
         "options": {
-          "timeout": 900000
+          "systemMessage": "={{ $('Build Prompts').item.json.letterRequest.system }}"
         }
       },
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.5,
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
       "position": [
         3060,
         272
       ],
-      "id": "claude-letter",
-      "name": "Claude - Cover Letter JSON",
+      "id": "gemini-letter",
+      "name": "Gemini - Cover Letter JSON",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
       "onError": "continueErrorOutput"
     },
     {
@@ -379,7 +405,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://claude-bridge:8080/unlock?key=claude",
+        "url": "http://claude-bridge:8080/unlock?key=gemini",
         "options": {}
       },
       "type": "n8n-nodes-base.httpRequest",
@@ -402,7 +428,7 @@
       "typeVersion": 1.2,
       "position": [
         2580,
-        480
+        880
       ],
       "id": "send-ats-report",
       "name": "Send ATS Report"
@@ -426,7 +452,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://claude-bridge:8080/unlock?key=claude",
+        "url": "http://claude-bridge:8080/unlock?key=gemini",
         "options": {}
       },
       "type": "n8n-nodes-base.httpRequest",
@@ -437,6 +463,74 @@
       ],
       "id": "release-lock-failed",
       "name": "Release Lock (failed)"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-3.1-flash-lite",
+          "mode": "list",
+          "cachedResultName": "models/gemini-3.1-flash-lite"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "={{ $('Build Prompts').item.json.resumeRequest.messages[0].content }}"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "builtInTools": {},
+        "options": {
+          "systemMessage": "={{ $('Build Prompts').item.json.resumeRequest.system }}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        2100,
+        480
+      ],
+      "id": "gemini-resume-fallback",
+      "name": "Gemini - Resume JSON (fallback)",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-3.1-flash-lite",
+          "mode": "list",
+          "cachedResultName": "models/gemini-3.1-flash-lite"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "={{ $('Build Prompts').item.json.letterRequest.messages[0].content }}"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "builtInTools": {},
+        "options": {
+          "systemMessage": "={{ $('Build Prompts').item.json.letterRequest.system }}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        3060,
+        480
+      ],
+      "id": "gemini-letter-fallback",
+      "name": "Gemini - Cover Letter JSON (fallback)",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
     }
   ],
   "pinData": {},
@@ -467,7 +561,7 @@
       "main": [
         [
           {
-            "node": "Claude - Resume JSON",
+            "node": "Gemini - Resume JSON",
             "type": "main",
             "index": 0
           }
@@ -481,7 +575,7 @@
         ]
       ]
     },
-    "Claude - Resume JSON": {
+    "Gemini - Resume JSON": {
       "main": [
         [
           {
@@ -492,7 +586,7 @@
         ],
         [
           {
-            "node": "Notify Failure",
+            "node": "Gemini - Resume JSON (fallback)",
             "type": "main",
             "index": 0
           }
@@ -544,7 +638,7 @@
       "main": [
         [
           {
-            "node": "Claude - Cover Letter JSON",
+            "node": "Gemini - Cover Letter JSON",
             "type": "main",
             "index": 0
           }
@@ -558,7 +652,7 @@
         ]
       ]
     },
-    "Claude - Cover Letter JSON": {
+    "Gemini - Cover Letter JSON": {
       "main": [
         [
           {
@@ -569,7 +663,7 @@
         ],
         [
           {
-            "node": "Notify Failure",
+            "node": "Gemini - Cover Letter JSON (fallback)",
             "type": "main",
             "index": 0
           }
@@ -713,6 +807,42 @@
         [
           {
             "node": "Release Lock (failed)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini - Resume JSON (fallback)": {
+      "main": [
+        [
+          {
+            "node": "Parse Resume JSON",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini - Cover Letter JSON (fallback)": {
+      "main": [
+        [
+          {
+            "node": "Parse Cover Letter JSON",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Failure",
             "type": "main",
             "index": 0
           }

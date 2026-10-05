@@ -1,5 +1,5 @@
 {
-  "name": "CV and Cover Letter Generator - Claude (Pro plan)",
+  "name": "CV and Cover Letter Generator - Local (Ollama)",
   "nodes": [
     {
       "parameters": {
@@ -24,7 +24,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://claude-bridge:8080/lock?key=claude",
+        "url": "http://claude-bridge:8080/lock?key=local",
         "options": {}
       },
       "type": "n8n-nodes-base.httpRequest",
@@ -165,7 +165,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://claude-bridge:8080/unlock?key=claude",
+        "url": "http://claude-bridge:8080/unlock?key=local",
         "options": {}
       },
       "type": "n8n-nodes-base.httpRequest",
@@ -199,7 +199,7 @@
         "url": "http://claude-bridge:8080/prompts",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ engine: 'claude', chatId: $json.message.chat.id, jobOffer: $json.message.text }) }}",
+        "jsonBody": "={{ JSON.stringify({ engine: 'local', chatId: $json.message.chat.id, jobOffer: $json.message.text }) }}",
         "options": {}
       },
       "type": "n8n-nodes-base.httpRequest",
@@ -217,12 +217,12 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://claude-bridge:8080/v1/messages",
+        "url": "http://ollama:11434/api/chat",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($('Build Prompts').item.json.resumeRequest) }}",
+        "jsonBody": "={{ JSON.stringify({ model: $('Build Prompts').item.json.resumeRequest.model, stream: false, format: 'json', options: { num_ctx: 8192, num_predict: 4096, temperature: 0.3 }, messages: [{ role: 'system', content: $('Build Prompts').item.json.resumeRequest.system }, ...$('Build Prompts').item.json.resumeRequest.messages] }) }}",
         "options": {
-          "timeout": 900000
+          "timeout": 1800000
         }
       },
       "type": "n8n-nodes-base.httpRequest",
@@ -231,8 +231,8 @@
         2100,
         272
       ],
-      "id": "claude-resume",
-      "name": "Claude - Resume JSON",
+      "id": "local-resume",
+      "name": "Local LLM - Resume JSON",
       "onError": "continueErrorOutput"
     },
     {
@@ -298,12 +298,12 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://claude-bridge:8080/v1/messages",
+        "url": "http://ollama:11434/api/chat",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($('Build Prompts').item.json.letterRequest) }}",
+        "jsonBody": "={{ JSON.stringify({ model: $('Build Prompts').item.json.letterRequest.model, stream: false, format: 'json', options: { num_ctx: 8192, num_predict: 4096, temperature: 0.3 }, messages: [{ role: 'system', content: $('Build Prompts').item.json.letterRequest.system }, ...$('Build Prompts').item.json.letterRequest.messages] }) }}",
         "options": {
-          "timeout": 900000
+          "timeout": 1800000
         }
       },
       "type": "n8n-nodes-base.httpRequest",
@@ -312,8 +312,8 @@
         3060,
         272
       ],
-      "id": "claude-letter",
-      "name": "Claude - Cover Letter JSON",
+      "id": "local-letter",
+      "name": "Local LLM - Cover Letter JSON",
       "onError": "continueErrorOutput"
     },
     {
@@ -379,7 +379,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://claude-bridge:8080/unlock?key=claude",
+        "url": "http://claude-bridge:8080/unlock?key=local",
         "options": {}
       },
       "type": "n8n-nodes-base.httpRequest",
@@ -426,7 +426,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://claude-bridge:8080/unlock?key=claude",
+        "url": "http://claude-bridge:8080/unlock?key=local",
         "options": {}
       },
       "type": "n8n-nodes-base.httpRequest",
@@ -467,7 +467,7 @@
       "main": [
         [
           {
-            "node": "Claude - Resume JSON",
+            "node": "Local LLM - Resume JSON",
             "type": "main",
             "index": 0
           }
@@ -481,7 +481,7 @@
         ]
       ]
     },
-    "Claude - Resume JSON": {
+    "Local LLM - Resume JSON": {
       "main": [
         [
           {
@@ -544,7 +544,7 @@
       "main": [
         [
           {
-            "node": "Claude - Cover Letter JSON",
+            "node": "Local LLM - Cover Letter JSON",
             "type": "main",
             "index": 0
           }
@@ -558,7 +558,7 @@
         ]
       ]
     },
-    "Claude - Cover Letter JSON": {
+    "Local LLM - Cover Letter JSON": {
       "main": [
         [
           {

@@ -6,10 +6,17 @@ const { spawn } = require('child_process');
 const PORT = process.env.PORT || 8080;
 const DEFAULT_MODEL = process.env.CLAUDE_MODEL || 'sonnet';
 const TIMEOUT_MS = 5 * 60 * 1000;
+const PROMPTS_FILE = process.env.PROMPTS_FILE || '/prompts/prompts.js'; // ./prompts mounted by docker-compose
 
 // Run one request at a time so parallel executions don't burn through limits at once
 let queue = Promise.resolve();
 const serial = fn => (queue = queue.then(fn, fn));
+
+// Job locks (one per bot, ?key=claude / gemini / local): n8n takes one before reading Telegram and
+// releases it after both PDFs are sent, so each bot handles one offer at a time.
+// A lock expires on its own if a run crashes midway.
+const LOCK_TTL_MS = Number(process.env.LOCK_TTL_MS) || 30 * 60 * 1000;
+const locks = new Map(); // key -> expiry timestamp
 
 // Return clean, valid JSON text or throw
 function cleanJson(text) {
@@ -41,7 +48,9 @@ async function generateJson({ system, prompt, model }) {
 
 function runClaude({ system, prompt, model }) {
   return new Promise((resolve, reject) => {
-    const args = ['-p', '--output-format', 'json', '--max-turns', '1', '--model', model || DEFAULT_MODEL];
+    // --tools "": text only. With tools on, the model sometimes tries one and hits --max-turns 1 (an error with no text)
+    const args = ['-p', '--output-format', 'json', '--max-turns', '1', '--tools', '', '--no-session-persistence',
+      '--model', model || DEFAULT_MODEL];
     if (system) args.push('--system-prompt', system);
 
     const env = { ...process.env };
@@ -57,7 +66,7 @@ function runClaude({ system, prompt, model }) {
       clearTimeout(timer);
       try {
         const res = JSON.parse(out);
-        if (res.is_error) return reject(new Error(res.result || 'Claude Code returned an error'));
+        if (res.is_error) return reject(new Error(`Claude Code returned an error (${res.subtype || 'unknown'}): ${res.result || ''}`.trim()));
         resolve(res.result);
       } catch {
         reject(new Error(`claude exited ${code}: ${(err || out).slice(0, 500)}`));
@@ -72,14 +81,37 @@ http.createServer((req, res) => {
     res.writeHead(status, { 'content-type': 'application/json' });
     res.end(JSON.stringify(body));
   };
-  if (req.method === 'GET' && req.url === '/health') return send(200, { ok: true });
-  if (req.method !== 'POST' || req.url !== '/v1/messages') return send(404, { error: 'not found' });
+  const url = new URL(req.url, 'http://bridge');
+  const key = url.searchParams.get('key') || 'default';
+  if (req.method === 'GET' && url.pathname === '/health') return send(200, { ok: true });
+  if (req.method === 'POST' && url.pathname === '/lock') {
+    if (Date.now() < (locks.get(key) || 0)) return send(200, { acquired: false });
+    locks.set(key, Date.now() + LOCK_TTL_MS);
+    return send(200, { acquired: true });
+  }
+  if (req.method === 'POST' && url.pathname === '/unlock') {
+    locks.delete(key);
+    return send(200, { released: true });
+  }
+  if (req.method !== 'POST' || !['/v1/messages', '/prompts'].includes(url.pathname)) return send(404, { error: 'not found' });
 
   let body = '';
   req.on('data', c => (body += c));
   req.on('end', () => {
     let data;
     try { data = JSON.parse(body); } catch { return send(400, { error: 'invalid JSON' }); }
+
+    // Shared prompts for all bots, re-read on every call so edits apply without a restart
+    if (url.pathname === '/prompts') {
+      try {
+        delete require.cache[require.resolve(PROMPTS_FILE)];
+        const { buildPrompts } = require(PROMPTS_FILE);
+        return send(200, { chatId: data.chatId, jobOffer: data.jobOffer, ...buildPrompts(data) });
+      } catch (e) {
+        console.error('prompts failed:', e.message);
+        return send(500, { error: 'prompts/prompts.js: ' + e.message });
+      }
+    }
 
     const prompt = (data.messages || [])
       .filter(m => m.role === 'user')
@@ -93,6 +125,7 @@ http.createServer((req, res) => {
     serial(job)
       .then(text => send(200, { content: [{ type: 'text', text }], stop_reason: 'end_turn' }))
       .catch(e => {
+        console.error('request failed:', e.message);
         const limited = /limit|rate|quota/i.test(e.message);
         send(limited ? 429 : 502, { error: e.message });
       });
